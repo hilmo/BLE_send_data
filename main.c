@@ -51,7 +51,7 @@
 #define DEVICE_NAME                     "LettPark"                                  /**< Name of device. Will be included in the advertising data. */
 #define SDC_SERVICE_UUID_TYPE           BLE_UUID_TYPE_VENDOR_BEGIN                  /**< UUID type for the Nordic UART Service (vendor specific). */
 
-#define APP_ADV_INTERVAL                480                                         /**< The advertising interval (in units of 0.625 ms. This value corresponds to 500 ms). */
+#define APP_ADV_INTERVAL                480                                         /**< The advertising interval (in units of 0.625 ms. This value corresponds to 300 ms). */
 #define APP_ADV_TIMEOUT_IN_SECONDS      20                                          /**< The advertising timeout (in units of seconds). */
 
 #define APP_TIMER_PRESCALER             0                                           /**< Value of the RTC1 PRESCALER register. */
@@ -79,7 +79,7 @@
 #define UART_TX_BUF_SIZE                256                                         /**< UART TX buffer size. */
 #define UART_RX_BUF_SIZE                256                                         /**< UART RX buffer size. */
 
-#define SAMPLES_IN_BUFFER               30                                          /**< Setting the number of samples the saadc is getting before sending the result. */
+#define SAMPLES_IN_BUFFER               60                                          /**< Setting the number of samples the saadc is getting before sending the result. */
 #define BATTERY_SAMPLES                 1
 
 static ble_sdc_t                        m_sdc;                                      /**< Structure to identify the Send Data Custom service. */
@@ -89,6 +89,8 @@ static nrf_saadc_value_t                adc_buf[SAMPLES_IN_BUFFER];             
 static nrf_saadc_value_t                adc_buf_bat[BATTERY_SAMPLES];
 static const nrf_drv_timer_t            m_timer = NRF_DRV_TIMER_INSTANCE(1);        /**< Timer Instance to Timer 1. */
 static nrf_ppi_channel_t                m_ppi_channel;                              /**< Structure to identify the ppi channel setup. */
+
+uint8_t                                 old_value = 0;
 
 /* Forward decleration of enable/disable saadc trough ppi functions. */
 void saadc_sampling_event_enable(void);                                     
@@ -285,12 +287,11 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
  * @param[in] p_ble_evt SoftDevice event.
  */
 static void on_ble_evt(ble_evt_t * p_ble_evt)
-{
-    uint32_t                         err_code;
-    
+{   
     switch (p_ble_evt->header.evt_id)
     {
         case BLE_GAP_EVT_CONNECTED:
+            m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
             //err_code = ble_advertising_start(BLE_ADV_MODE_IDLE);
             //APP_ERROR_CHECK(err_code);
             nrf_gpio_pin_toggle(LED_1);
@@ -456,7 +457,11 @@ static void pm_evt_handler(pm_evt_t const * p_evt)
     /*switch(p_evt->evt_id)
     {
         case PM_EVT_BONDED_PEER_CONNECTED:
+            saadc_sampling_event_enable();
+            break;
         case PM_EVT_LINK_SECURED:
+            saadc_sampling_event_enable();
+            break;
         case PM_EVT_LINK_SECURE_FAILED:
         case PM_EVT_STORAGE_FULL:
         case PM_EVT_ERROR_UNEXPECTED:
@@ -583,12 +588,26 @@ void saadc_event_handler(nrf_drv_saadc_evt_t const * p_event)
         value = value/SAMPLES_IN_BUFFER;
         
         if (value <= 254) {
-                data_to_send[0] = value;
-                err_code = ble_sdc_data_send(&m_sdc, data_to_send, 1);
-                APP_ERROR_CHECK(err_code);
+                if ( value > old_value ){
+                    old_value = value;
+                    data_to_send[0] = value;
+                    err_code = ble_sdc_data_send(&m_sdc, data_to_send, 1);
+                    APP_ERROR_CHECK(err_code);
+                }
+                else if ( (value <= old_value) && (value >= 25) ) {
+                    data_to_send[0] = old_value;
+                    err_code = ble_sdc_data_send(&m_sdc, data_to_send, 1);
+                    APP_ERROR_CHECK(err_code);
+                }
+                else if ( (value <= old_value) && (value < 25) ) {
+                    old_value = 0;
+                    data_to_send[0] = value;
+                    err_code = ble_sdc_data_send(&m_sdc, data_to_send, 1);
+                    APP_ERROR_CHECK(err_code);
+                }
                 nrf_gpio_pin_toggle(LED_2);
         }
-        printf("%d\r\n", value);
+        //printf("%d\r\n", value);
     }
 }
 
@@ -662,7 +681,7 @@ int main(void)
     bool erase_bonds;
     
     APP_TIMER_INIT(APP_TIMER_PRESCALER, APP_TIMER_OP_QUEUE_SIZE, false); 
-   // uart_init();
+    //uart_init();
     ble_stack_init();
     gap_params_init();
     services_init();
